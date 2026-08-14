@@ -21,7 +21,7 @@
 <meta property="og:image" content="https://woolwag3338.github.io/character-height-board/ogp.png">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="10cm ごとの目盛りが引かれた盤面と、タイトル「立ち絵身長比較ボード」">
+<meta property="og:image:alt" content="10cm ごとの目盛りを引いた盤面に、175cm と 80cm の人型を並べて高さを見比べている画面">
 <meta property="og:locale" content="ja_JP">
 
 <meta name="twitter:card" content="summary_large_image">
@@ -38,7 +38,7 @@
      （画像は Canvas と IndexedDB の中で完結する） -->
 <script>
 (function () {
-  var GA_ID = 'G-XXXXXXXXXX';   // GA4 の計測 ID
+  var GA_ID = 'G-T7SNQ19CHZ';   // GA4 の計測 ID
   if (!location.hostname.endsWith('.github.io')) return;
   var s = document.createElement('script');
   s.async = true;
@@ -350,6 +350,11 @@
     padding: var(--sp-3);
     z-index: 30;
     min-width: 230px;
+    /* 項目どうしは gap で離す。詰めて置くと、上下のボタンの影が同じ継ぎ目で
+       ぶつかり合い、1 枚に溶けて見える。値はツールバーの row-gap と揃える */
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-2);
   }
   .menu-body button { width: 100%; text-align: left; }
   /* 目盛り軸は左に貼り付いたまま、縦スクロールには追従させる */
@@ -384,7 +389,9 @@
      常設の導線は「その他」メニューの「このツールについて」が持つ */
   #empty-msg .credit {
     margin-top: var(--sp-6);
-    font-size: 12px;
+    /* 読ませる文章はすべて 14px。補足であることは色（--muted）が示すので、
+       サイズを落とす必要はない（→ 仕様 8 章） */
+    font-size: 14px;
     line-height: 1.9;
     /* 親が pointer-events: none なので、リンクを拾えるようここだけ戻す */
     pointer-events: auto;
@@ -498,12 +505,16 @@
     background: var(--face-press);
     color: var(--accent-text);
   }
-  #list-none { color: var(--muted); font-size: 13px; line-height: 1.9; }
+  #list-none { color: var(--muted); font-size: 14px; line-height: 1.9; }
 
   /* ---- 行を詰めた表示 ----
      体数が増えると、見やすさより「何行見渡せるか」が効いてくる。
      常時この密度にはせず、切り替えにして少数のときの見やすさを残す。
-     行 70px → 44px（1440×900 で 5 行 → 8 行） */
+     行 70px → 44px（1440×900 で 5 行 → 8 行）。
+
+     **13px を使うのはここだけ。** 読ませる文章は補足でも 14px に揃えてある。
+     ここは「読みやすさを意図的に手放して行数を稼ぐ」場所なので、
+     サムネイル（36×50 → 24×34）と一貫して文字も落とす */
   #char-list.dense li { padding: var(--sp-1) var(--sp-2); gap: var(--sp-2); }
   #char-list.dense li + li { margin-top: 2px; }
   #char-list.dense li.sel::before { top: var(--sp-1); bottom: var(--sp-1); }
@@ -672,7 +683,7 @@
     box-shadow: var(--well), var(--ring);
   }
   .field .val { float: right; color: var(--text); font-size: 14px; }
-  .hint { font-size: 13px; color: var(--muted); line-height: 1.7; margin: -4px 0 var(--sp-2); }
+  .hint { font-size: 14px; color: var(--muted); line-height: 1.7; margin: -4px 0 var(--sp-2); }
   .btn-row { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-2); }
   .btn-row button { flex: 1; padding: 0 var(--sp-1); font-size: 14px; }
   /* 重なり順はラベルを横に置いて 1 行に収める（縦に積むと 2 行ぶん使う） */
@@ -758,7 +769,7 @@
   /* このツールについて。読み物なので、入力欄のある他のダイアログより幅を広く取る */
   #dlg-about { max-width: 480px; }
   #dlg-about .about-lead { font-size: 14px; line-height: 1.9; margin-bottom: var(--sp-4); }
-  .about { font-size: 13px; line-height: 1.9; margin-bottom: var(--sp-5); }
+  .about { font-size: 14px; line-height: 1.9; margin-bottom: var(--sp-5); }
   /* 見出しは色ではなく太さで示す。差し色はリンクに取っておく */
   .about dt { font-weight: 700; margin-top: var(--sp-3); }
   .about dt:first-child { margin-top: 0; }
@@ -922,7 +933,9 @@
       </div>
     </div>
     <div id="empty-msg">
-      <div>画像をここにドラッグ&amp;ドロップしてください<br>（PNG / JPEG、背景が透過された立ち絵を推奨）</div>
+      <!-- 形式を列挙せず「推奨」だけを書く。受け入れ自体は image/* なので何でも通る。
+           JPEG は透過を持てないため、推奨として PNG と並べると矛盾する -->
+      <div>画像をここにドラッグ&amp;ドロップしてください<br>（背景が透過された PNG / WebP を推奨）</div>
       <div class="credit">
         作成者：<a href="https://x.com/WW_3338" target="_blank" rel="noopener noreferrer">Wool&amp;Wag</a><br>
         画像はブラウザ内で処理され、サーバーには送信されません／アクセス解析に Google Analytics を使用しています
