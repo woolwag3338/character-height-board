@@ -160,6 +160,8 @@
   }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; }
+  /* iOS は横向きにすると文字を勝手に拡大する。チュートリアルのカードやヘルプの文字だけ大きさが変わるので止める */
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
   /* ---- スクロールバー ----
      既定の灰色のバーは配色になじまないうえ、矢印ボタンが盤面の角丸を四角く塗り潰す。
@@ -1102,7 +1104,9 @@
   }
   .dlg-actions { display: flex; justify-content: flex-end; gap: var(--sp-4); margin-top: 24px; }
   .dlg-actions button { height: 48px; padding: 0 24px; font-weight: 700; }
-  dialog button:not(.primary):not(:disabled), dialog input { background: var(--panel-light); }
+  /* ヘルプの節の見出しは除く。塗ると、スマホで開いた節のへこみの影を見出しの高さぶん隠し、
+     箱の上端が前の見出しの下に潜り込んで見えていた */
+  dialog button:not(.primary):not(.help-head):not(:disabled), dialog input { background: var(--panel-light); }
   dialog .hint { margin: 0; }
 
   /* 1 枚の追加：左に絵、右に名前と身長 */
@@ -1341,6 +1345,10 @@
   #autosave-banner strong { color: #7a2238; }
   #btn-banner-save { flex: none; display: inline-flex; align-items: center; gap: 6px; font-weight: 700; background: #fdf3f5; color: #7a2238; }
   #btn-banner-save svg { width: 16px; height: 16px; }
+  /* 閉じる（×）は面に溶かし、「盤面を保存」と競わせない */
+  #btn-banner-close { flex: none; margin: -4px -6px -4px -6px; background: transparent; box-shadow: none; color: #8c4356; }
+  #btn-banner-close:hover:not(:disabled) { background: rgba(255, 255, 255, .55); color: #7a2238; }
+  #btn-banner-close:focus-visible:not(:disabled) { box-shadow: var(--ring); }
 
   /* 動きを減らす設定のときは、影の移り変わりと押下時の縮みを止める。
      位置決めの transform（ツールチップ）は残す */
@@ -1641,6 +1649,12 @@
     }
     .help-head[aria-expanded="true"] { box-shadow: none; }
     .help-head[aria-expanded="true"]::after { transform: rotate(-135deg) translateY(-3px); }
+    /* タッチ端末は、触った見出しを「乗せている」ままにする（iOS は他を触るまで戻さない）。
+       開いた節の上端に桃色の帯が残り、見出しの差し色も消えるので、乗せたときの色を付けない */
+    @media (hover: none) {
+      .help-head:hover:not(:disabled) { background: transparent; color: var(--text); }
+      .help-head[aria-expanded="true"]:hover:not(:disabled) { color: var(--accent-text); }
+    }
     .help-body { padding: 0 18px; }
     .help-body h4 { display: none; }
     .save-ways { grid-template-columns: 1fr; gap: 14px; }
@@ -1676,7 +1690,17 @@
     }
     /* お知らせは画面の下に出す（盤面の下ではシートに隠れる） */
     #status { position: fixed; left: 12px; right: 12px; bottom: 20px; width: auto; transform: none; z-index: 40; }
-    #autosave-banner { left: 8px; right: 8px; top: 8px; flex-wrap: wrap; }
+    /* 横に 4 つ並べると文字の幅が足りず 4 行に折れて盤面の半分ほどを占めるので、
+       1 段目に印・文・×、2 段目に「盤面を保存」を置く */
+    #autosave-banner {
+      left: 8px; right: 8px; top: 8px;
+      display: grid; grid-template-columns: 20px 1fr auto; align-items: start;
+      column-gap: 12px; row-gap: 6px; padding: 10px 10px 12px 16px;
+    }
+    #autosave-banner .b-ico { padding-top: 2px; }
+    #autosave-banner .b-txt { line-height: 1.55; }
+    #btn-banner-close { grid-column: 3; grid-row: 1; margin: -4px -4px 0 0; }
+    #btn-banner-save { grid-column: 2 / 4; grid-row: 2; justify-self: start; }
     /* 何もない画面：枠を外し、ボタンを縦に大きく並べる */
     #empty-msg { padding: 16px; }
     .empty-card { border: none; padding: 16px 8px; background: transparent; }
@@ -2033,12 +2057,14 @@
         <span>保存した盤面（.hboard）なら、その盤面を開きます</span>
       </div>
     </div>
-    <!-- 自動保存できないときの帯。直るまで出したままにする -->
+    <!-- 自動保存できないときの帯。× で閉じるまで出したままにする。
+         スマホでは盤面の半分ほどを占めるので閉じられるようにする。開き直してまだ保存できなければ、また出る -->
     <div id="autosave-banner" role="alert" hidden>
       <span class="b-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4l9 16H3z"/><path d="M12 10v4M12 17h.01"/></svg></span>
       <span class="b-txt"><strong>このブラウザに自動保存できません</strong>
         <span>ページを閉じると今の盤面は消えます。残すときは .hboard に保存してください。</span></span>
       <button type="button" id="btn-banner-save"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4h11l3 3v13H5z"/><path d="M8 4v5h7V4M8 20v-6h8v6"/></svg>盤面を保存</button>
+      <button type="button" class="icon" id="btn-banner-close" title="閉じる" aria-label="閉じる"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
     </div>
     <!-- お知らせ（カード）を下から積む。読み上げられるよう role="status" -->
     <div id="status" role="status" aria-live="polite"></div>
@@ -2676,7 +2702,7 @@ const HeightBoardCore = (() => {
 
   function openDB() {
     if (dbPromise) return dbPromise;
-    dbPromise = new Promise((resolve, reject) => {
+    const mine = new Promise((resolve, reject) => {
       let req;
       try {
         req = indexedDB.open(DB_NAME, 1);
@@ -2684,14 +2710,47 @@ const HeightBoardCore = (() => {
       req.onupgradeneeded = () => {
         if (!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE);
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        const db = req.result;
+        // ブラウザ側から接続を切られたら、次の読み書きで開き直す
+        db.onclose = () => { if (dbPromise === mine) dbPromise = null; };
+        resolve(db);
+      };
       req.onerror = () => reject(req.error);
       req.onblocked = () => reject(new Error('blocked'));
     });
-    return dbPromise;
+    dbPromise = mine;
+    return mine;
+  }
+
+  // iOS（Safari と、中身が同じ iPhone の Chrome）は、ページを裏に回している間に保存先への接続を切ることがある
+  // （「Connection to Indexed Database server lost」）。切れた接続を握ったままだと以後ずっと失敗し、
+  // 再読み込みするまで自動保存が止まって「自動保存できません」の帯が出る。
+  // 失敗したら接続を捨てて開き直し、1 回だけやり直す。2 回目も失敗したら（容量不足・使えない環境など）、そのまま失敗にする
+  function resetDB() {
+    const p = dbPromise;
+    dbPromise = null;
+    if (p) p.then((db) => { try { db.close(); } catch (e) { /* 閉じられなくても困らない */ } }, () => {});
+  }
+
+  async function withReconnect(op) {
+    try {
+      return await op();
+    } catch (e) {
+      resetDB();
+      return op();
+    }
   }
 
   function idbPut(key, value) {
+    return withReconnect(() => idbPutOnce(key, value));
+  }
+
+  function idbGet(key) {
+    return withReconnect(() => idbGetOnce(key));
+  }
+
+  function idbPutOnce(key, value) {
     return openDB().then((db) => new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, 'readwrite');
       tx.objectStore(STORE).put(value, key);
@@ -2703,7 +2762,7 @@ const HeightBoardCore = (() => {
     }));
   }
 
-  function idbGet(key) {
+  function idbGetOnce(key) {
     return openDB().then((db) => new Promise((resolve, reject) => {
       const tx = db.transaction(STORE, 'readonly');
       const req = tx.objectStore(STORE).get(key);
@@ -4775,6 +4834,7 @@ const HeightBoardCore = (() => {
 
   $('btn-empty-add').addEventListener('click', () => $('btn-add').click());
   $('btn-banner-save').addEventListener('click', () => $('btn-save').click());
+  $('btn-banner-close').addEventListener('click', () => { $('autosave-banner').hidden = true; });
 
   // ---- ヘルプ ----
   // 節は 1 つだけ開く。PC では左の見出しで切り替え、スマホではたたんだ節を開く
@@ -4978,8 +5038,14 @@ const HeightBoardCore = (() => {
       bottom: vh - spot.bottom - TUT_GAP - TUT_MARGIN >= chh,
       top: spot.top - TUT_GAP - TUT_MARGIN >= chh
     };
-    const order = narrowLayout.matches && vw < 768 ? ['top', 'bottom'] : ['right', 'bottom', 'left', 'top'];
-    const side = order.find((k) => room[k]) || 'inside';
+    const phone = narrowLayout.matches && vw < 768;
+    const order = phone ? ['top', 'bottom'] : ['right', 'bottom', 'left', 'top'];
+    let side = order.find((k) => room[k]);
+    // スマホで上下どちらにも収まらないときは、空きの広い方の画面の端に寄せ、照らす所に少しだけ被せる。
+    // 照らす所の中に重ねると、盤面全体を照らす手順 3 で盤面がほとんど隠れる（背の低い画面。iPhone の Safari など）
+    const squeezed = !side && phone;
+    if (squeezed) side = spot.top > vh - spot.bottom ? 'top' : 'bottom';
+    side = side || 'inside';
     const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
     let x, y;
     if (side === 'right' || side === 'left') {
@@ -4988,6 +5054,7 @@ const HeightBoardCore = (() => {
     } else if (side === 'top' || side === 'bottom') {
       x = clamp(cx - cw / 2, TUT_MARGIN, vw - cw - TUT_MARGIN);
       y = side === 'bottom' ? spot.bottom + TUT_GAP : spot.top - TUT_GAP - chh;
+      if (squeezed) y = clamp(y, TUT_MARGIN, vh - chh - TUT_MARGIN);
     } else {
       x = clamp(spot.right - cw - 40, TUT_MARGIN, vw - cw - TUT_MARGIN);
       y = clamp(spot.top + 40, TUT_MARGIN, vh - chh - TUT_MARGIN);
@@ -4997,6 +5064,7 @@ const HeightBoardCore = (() => {
     card.style.left = x + 'px';
     card.style.top = y + 'px';
     card.dataset.side = side;
+    card.dataset.squeezed = squeezed ? '1' : '';
     if (tutorial.fresh) {
       void card.offsetWidth;
       card.style.transitionProperty = '';
