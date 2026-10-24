@@ -2742,24 +2742,8 @@ const HeightBoardCore = (() => {
     }
   }
 
-  function idbPut(key, value) {
-    return withReconnect(() => idbPutOnce(key, value));
-  }
-
   function idbGet(key) {
     return withReconnect(() => idbGetOnce(key));
-  }
-
-  function idbPutOnce(key, value) {
-    return openDB().then((db) => new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE, 'readwrite');
-      tx.objectStore(STORE).put(value, key);
-      tx.oncomplete = resolve;
-      tx.onerror = () => reject(tx.error);
-      // 容量不足などで中断されると、error ではなく abort だけが来る。受けないと保存が終わらないまま止まり、
-      // 「自動保存できません」の帯も出ない
-      tx.onabort = () => reject(tx.error || new Error('保存が中断されました'));
-    }));
   }
 
   function idbGetOnce(key) {
@@ -2770,6 +2754,72 @@ const HeightBoardCore = (() => {
       req.onerror = () => reject(req.error);
       tx.onabort = () => reject(tx.error || new Error('読み込みが中断されました'));
     }));
+  }
+
+  // ---- 自動保存の形 ----
+  //   'board'      { version: 2, chars: [キャラの並び（画像は img の鍵で指す）], pendingLegacy: [id] }
+  //   'img:<鍵>'   画像のバイト列 { type, bytes: ArrayBuffer }。1 枚につき 1 回だけ書き、どこからも指されなくなったら消す
+  //   'current'    10 月までの形。画像を Blob のまま、キャラの並びに入れていた
+  //
+  // 画像を Blob のまま預けない。iOS（Safari と、中身が同じ iPhone の Chrome）は、預けた Blob を後で取り出せなくなる
+  // ことがあり、開き直すと盤面が空になっていた（公開ページを更新した後の再読み込みで起きた）。バイト列なら、この不具合の
+  // 起きる形そのものを避けられる。並びと画像を分けるのは、保存のたびに全員の画像を書き直さないため
+  // （並びは操作のたびに変わるが、画像は変わらない）
+  const BOARD_KEY = 'board';
+  const LEGACY_KEY = 'current';
+  const IMG_PREFIX = 'img:';
+  const blobKeys = new WeakMap(); // Blob → 画像の鍵
+  const storedImgs = new Set();   // 保存先に書いてある画像の鍵
+  // 開いたときに画像を取り出せなかったキャラ。盤面には出せないが、捨てると次の保存で本当に消えるので、
+  // 保存先には残し続ける（次に開いたときに取り出せれば戻る）。盤面を開く（.hboard）で置き換えたときだけ手放す
+  let unreadable = [];    // 新しい形の並びの要素
+  let pendingLegacy = []; // 古い形（'current'）のまま取り出せなかったキャラの id
+
+  function imgKeyOf(blob) {
+    let k = blobKeys.get(blob);
+    if (!k) {
+      k = Date.now().toString(36) + Math.random().toString(36).slice(2, 9);
+      blobKeys.set(blob, k);
+    }
+    return k;
+  }
+
+  // 並びを書き、まだ書いていない画像を足し、どこからも指されなくなった画像を消す。1 つのトランザクションで行う
+  function writeBoardOnce(board, fresh) {
+    return openDB().then((db) => new Promise((resolve, reject) => {
+      const tx = db.transaction(STORE, 'readwrite');
+      const store = tx.objectStore(STORE);
+      for (const f of fresh) store.put({ type: f.type, bytes: f.bytes }, IMG_PREFIX + f.key);
+      store.put(board, BOARD_KEY);
+      const used = new Set(board.chars.map((m) => IMG_PREFIX + m.img));
+      const keys = store.getAllKeys();
+      keys.onsuccess = () => {
+        for (const k of keys.result) {
+          if (typeof k === 'string' && k.startsWith(IMG_PREFIX) && !used.has(k)) store.delete(k);
+        }
+      };
+      // 古い形は、取り出せなかったキャラが残っていなければ用済み
+      if (board.pendingLegacy.length === 0) store.delete(LEGACY_KEY);
+      tx.oncomplete = resolve;
+      tx.onerror = () => reject(tx.error);
+      // 容量不足などで中断されると、error ではなく abort だけが来る。受けないと保存が終わらないまま止まり、
+      // 「自動保存できません」の帯も出ない
+      tx.onabort = () => reject(tx.error || new Error('保存が中断されました'));
+    }));
+  }
+
+  async function writeBoard(board, live) {
+    const fresh = [];
+    const seen = new Set();
+    for (const { meta, blob } of live) {
+      if (storedImgs.has(meta.img) || seen.has(meta.img)) continue;
+      seen.add(meta.img);
+      fresh.push({ key: meta.img, type: meta.type, bytes: await blob.arrayBuffer() });
+    }
+    await withReconnect(() => writeBoardOnce(board, fresh));
+    // 指されていない画像は消したので、書いてあるのは並びが指す画像だけ
+    storedImgs.clear();
+    for (const m of board.chars) storedImgs.add(m.img);
   }
 
   let saveTimer = null;
@@ -2801,20 +2851,25 @@ const HeightBoardCore = (() => {
     } catch (e) { /* 使えないだけ。現状と同じ */ }
   }
 
-  async function save() {
-    if (!persistOk || tutorial) return;
-    try {
-      const payload = chars.map((ch) => ({
+  // 保存は 1 つずつ順に行う。画像のバイト列を取り出す間に次の保存が始まり、古い並びが後から書かれるのを防ぐ
+  let saveChain = Promise.resolve();
+  function save() {
+    if (!persistOk || tutorial) return saveChain;
+    // 並びは呼んだ時点のものを控える。直後にチュートリアルが盤面を練習用に差し替えることがある
+    const live = chars.map((ch) => ({
+      meta: {
         id: ch.id, name: ch.name, heightCm: ch.heightCm, x: ch.x, z: ch.z,
         bbox: ch.bbox, topRatio: ch.topRatio, bottomRatio: ch.bottomRatio,
-        hidden: !!ch.hidden, blob: ch.blob, srcW: ch.srcW, srcH: ch.srcH
-      }));
-      await idbPut('current', payload);
-      askPersist(); // 保存の完了を遅らせないよう await しない
-    } catch (e) {
-      persistOk = false;
-      showAutosaveBanner();
-    }
+        hidden: !!ch.hidden, srcW: ch.srcW, srcH: ch.srcH,
+        img: imgKeyOf(ch.blob), type: ch.blob.type || 'image/png'
+      },
+      blob: ch.blob
+    }));
+    const board = { version: 2, chars: live.map((c) => c.meta).concat(unreadable), pendingLegacy: pendingLegacy.slice() };
+    saveChain = saveChain.then(() => writeBoard(board, live)).then(
+      () => { askPersist(); }, // 保存の完了を遅らせないよう await しない
+      () => { persistOk = false; showAutosaveBanner(); });
+    return saveChain;
   }
 
   // 読み込んでいる間（取り出す間も含む）にチュートリアルへ差し替えると、読んだキャラが練習用の盤面に入ってしまう。
@@ -2829,26 +2884,84 @@ const HeightBoardCore = (() => {
   }
 
   async function loadNow() {
-    let payload;
+    let board, legacy;
     try {
-      payload = await idbGet('current');
+      board = await idbGet(BOARD_KEY);
+      // 古い形を読むのは、新しい形がまだ無い（10 月までの版で保存した）か、古い形のまま取り出せなかったキャラが残っているとき
+      const pending = board && Array.isArray(board.pendingLegacy) ? board.pendingLegacy : [];
+      if (!board || pending.length) legacy = await idbGet(LEGACY_KEY);
     } catch (e) {
       persistOk = false;
       showAutosaveBanner();
       return;
     }
-    if (!Array.isArray(payload)) return;
-    for (const rec of payload) {
+    const want = board ? new Set(board.pendingLegacy || []) : null; // null は「古い形のキャラをすべて」
+    const items = [
+      ...(board && Array.isArray(board.chars) ? board.chars : []).map((meta) => ({ meta, legacy: false })),
+      ...(Array.isArray(legacy) ? legacy : []).filter((r) => !want || want.has(r.id)).map((meta) => ({ meta, legacy: true }))
+    ];
+    if (items.length === 0) return;
+
+    // 画像を取り出して盤面用に組み立てる。取り出せなければ null
+    const restore = async ({ meta, legacy: old }, fromLegacy) => {
       try {
-        const display = await makeDisplayCanvas(rec.blob);
-        const ch = Object.assign({}, rec, { display });
+        let blob;
+        if (old) {
+          blob = fromLegacy ? (fromLegacy.find((r) => r.id === meta.id) || meta).blob : meta.blob;
+        } else {
+          const rec = await idbGet(IMG_PREFIX + meta.img);
+          blob = new Blob([rec.bytes], { type: rec.type || meta.type || 'image/png' });
+          blobKeys.set(blob, meta.img);
+          storedImgs.add(meta.img);
+        }
+        const display = await makeDisplayCanvas(blob);
+        const ch = {
+          id: meta.id, name: meta.name, heightCm: meta.heightCm, x: meta.x, z: meta.z,
+          bbox: meta.bbox, topRatio: meta.topRatio, bottomRatio: meta.bottomRatio,
+          hidden: !!meta.hidden, srcW: meta.srcW, srcH: meta.srcH, blob, display
+        };
         ch.thumb = makeThumb(ch);
+        return ch;
+      } catch (e) {
+        return null;
+      }
+    };
+    const loaded = [];
+    for (const it of items) loaded.push(await restore(it));
+    // 取り出せなかったものは、保存先につなぎ直して 1 回だけやり直す（接続が切れた後に起きやすい）
+    if (loaded.includes(null)) {
+      resetDB();
+      let again = null;
+      if (items.some((it, i) => !loaded[i] && it.legacy)) {
+        try { again = await idbGet(LEGACY_KEY); } catch (e) { again = null; }
+      }
+      for (let i = 0; i < items.length; i++) {
+        if (!loaded[i]) loaded[i] = await restore(items[i], Array.isArray(again) ? again : null);
+      }
+    }
+
+    unreadable = [];
+    pendingLegacy = [];
+    items.forEach((it, i) => {
+      const ch = loaded[i];
+      if (ch) {
         registry.set(ch.id, ch);
         chars.push(ch);
-      } catch (e) { /* 壊れたレコードは読み飛ばす */ }
-    }
+      } else if (it.legacy) {
+        pendingLegacy.push(it.meta.id);
+      } else {
+        unreadable.push(it.meta);
+      }
+    });
     C.normalizeZ(chars);
     renderAll();
+    const lost = unreadable.length + pendingLegacy.length;
+    if (lost > 0) {
+      toast({ kind: 'failed', key: 'unreadable', text: lost + ' 体の画像を読み込めませんでした',
+              sub: '保存先には残してあります。ページを開き直すと戻ることがあります。' });
+    }
+    // 古い形から取り出せたものは、取り出せるうちに新しい形へ移しておく
+    if (items.some((it, i) => it.legacy && loaded[i])) await save();
   }
 
   // ---- お知らせ ----
@@ -5248,7 +5361,8 @@ const HeightBoardCore = (() => {
   // 出したことにしておく。控えられない環境では、開くたびに出て邪魔になるので自動では出さない
   async function maybeStartTutorial() {
     if (tutorialSeen()) return;
-    if (chars.length > 0) { markTutorialSeen(); return; }
+    // 画像を取り出せなかったキャラしかいない場合も、前から使っている人なので出さない
+    if (chars.length > 0 || unreadable.length > 0 || pendingLegacy.length > 0) { markTutorialSeen(); return; }
     if (!markTutorialSeen()) return;
     // 自動保存の読み込み中に追加が始まっていたら、邪魔をしない
     if (busy || dlg.open || dlgBatch.open) return;
@@ -5349,8 +5463,11 @@ const HeightBoardCore = (() => {
       loaded.push(ch);
     }
 
-    // 読み込んだ内容で完全に置き換える。Undo 履歴は前の盤面のものなので捨てる
+    // 読み込んだ内容で完全に置き換える。Undo 履歴は前の盤面のものなので捨てる。
+    // 開いたときに画像を取り出せず控えていたキャラも、置き換えると決めたので手放す
     chars = loaded;
+    unreadable = [];
+    pendingLegacy = [];
     registry.clear();
     for (const ch of chars) registry.set(ch.id, ch);
     C.normalizeZ(chars);
